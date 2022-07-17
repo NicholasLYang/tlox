@@ -1,0 +1,5 @@
+class Foo < Bat {
+  bar(a: number, b: string, c: boolean) {
+    var c: number = 10;
+  }
+}
