@@ -6,7 +6,7 @@ extern "C" {
 }
 
 fn main() -> Result<(), anyhow::Error> {
-    parse("class Foo {}")?;
+    parse("class Foo { fun bar() {} }")?;
 
     Ok(())
 }
@@ -53,7 +53,11 @@ enum Stmt {
     },
     Expression(Expr),
     Print(Expr),
-    Function {},
+    Function {
+        name: String,
+        body: Vec<Stmt>,
+        params: Vec<String>,
+    },
     Class {
         name: String,
         super_class: Option<String>,
@@ -93,44 +97,92 @@ fn parse_program(code: &str, cursor: &mut TreeCursor) -> Result<Option<Program>,
     Ok(None)
 }
 
-fn get_singular_field<'a>(field_name: &str, cursor: &mut TreeCursor<'a>) -> Option<Node<'a>> {
-    let mut children: Vec<_> = cursor
-        .node()
-        .children_by_field_name(field_name, cursor)
-        .collect();
-    if children.len() == 1 {
-        children.pop()
-    } else {
-        None
-    }
-}
-
 fn parse_declaration<'a>(code: &str, cursor: &mut TreeCursor<'a>) -> Result<Stmt, anyhow::Error> {
     match cursor.node().kind() {
         "classDeclaration" => {
-            let name = get_singular_field("name", cursor)
-                .ok_or_else(|| anyhow!("No `name` in class declaration"))?;
-            let name = code[name.byte_range()].to_string();
+            let mut is_valid_child = cursor.goto_first_child();
+            let mut name = None;
+            let mut super_class = None;
+            let mut methods = Vec::new();
 
-            let super_class = get_singular_field("super", cursor);
-            let super_class = super_class.map(|s| code[s.byte_range()].to_string());
+            while is_valid_child {
+                match cursor.field_name() {
+                    Some("name") => {
+                        name = Some(code[cursor.node().byte_range()].to_string());
+                    }
+                    Some("super_class") => {
+                        super_class = Some(code[cursor.node().byte_range()].to_string());
+                    }
+                    Some(field) => return Err(anyhow!("Unexpected field `{}`", field)),
+                    None if cursor.node().kind() == "function" => {
+                        methods.push(parse_function(code, cursor)?);
+                    }
+                    None => {}
+                }
 
-            let methods = cursor
-                .node()
-                .children_by_field_name("function", cursor)
-                .map(parse_function)
-                .collect();
+                is_valid_child = cursor.goto_next_sibling();
+            }
 
             Ok(Stmt::Class {
-                name,
+                name: name.ok_or_else(|| anyhow!("Class does not have a name"))?,
                 super_class,
                 methods,
             })
+        }
+        "funDeclaration" => {
+            let mut is_valid_child = cursor.goto_first_child();
+
+            while is_valid_child {
+                match cursor.field_name() {
+                    // TODO: Detect potential duplicates
+                    Some("function") => return parse_function(code, cursor),
+                    Some(field) => return Err(anyhow!("Unexpected field `{}`", field)),
+                    None => {}
+                }
+
+                is_valid_child = cursor.goto_next_sibling();
+            }
+
+            Err(anyhow!("No function declaration found"))
         }
         kind => todo!("{:?}", kind),
     }
 }
 
-fn parse_function<'a>(node: Node<'a>) -> Stmt {
-    Stmt::Function {}
+fn parse_function(code: &str, cursor: &mut TreeCursor) -> Result<Stmt, anyhow::Error> {
+    let mut is_valid_child = cursor.goto_first_child();
+    let mut name = None;
+    let mut body = None;
+    let mut params = None;
+
+    while is_valid_child {
+        match cursor.field_name() {
+            Some("name") => {
+                name = Some(code[cursor.node().byte_range()].to_string());
+            }
+            Some("body") => {
+                body = Some(parse_block(cursor)?);
+            }
+            Some("params") => {
+                params = Some(parse_parameters(cursor)?);
+            }
+            Some(field) => return Err(anyhow!("Unexpected field `{}`", field)),
+            None => {}
+        }
+
+        is_valid_child = cursor.goto_next_sibling();
+    }
+    Ok(Stmt::Function {
+        name: name.ok_or_else(|| anyhow!("Function does not have name"))?,
+        body: body.ok_or_else(|| anyhow!("Function does not have body"))?,
+        params: params.unwrap_or_default(),
+    })
+}
+
+fn parse_block(cursor: &mut TreeCursor) -> Result<Vec<Stmt>, anyhow::Error> {
+    Ok(Vec::new())
+}
+
+fn parse_parameters(cursor: &mut TreeCursor) -> Result<Vec<String>, anyhow::Error> {
+    Ok(Vec::new())
 }
